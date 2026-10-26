@@ -15,7 +15,10 @@
   .eyebrow { font-size: 10px; letter-spacing: .16em; text-transform: uppercase; color: #657364; font-weight: 700; }
   h1, h2, h3, h4, h5, h6, .eyebrow, .label { font-family: "Garamond Premier Pro", Garamond, Georgia, serif; }
   h1 { margin: 10px 0 4px; font-size: 25px; line-height: 1.15; font-weight: 700; }
-  .location { color: #657064; font-size: 13px; margin: 0 0 22px; }
+  .location { color: #657064; font-size: 13px; line-height: 1.55; margin: 7px 0 22px; }
+  #panel.is-empty .location { color: #3d483e; margin-bottom: 22px; }
+  #panel.is-empty .field { margin: 15px 0; }
+  #panel.is-empty .pill { background: transparent; padding: 0; border-radius: 0; color: #657064; }
   .rule { height: 1px; background: #d9ddd5; margin: 18px 0; }
   .field { margin: 17px 0; }
   .label { font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: #758071; margin-bottom: 5px; }
@@ -33,11 +36,11 @@
 <body>
 <div id="archive">
   <div id="map" aria-label="Interactive golf course map"></div>
-  <aside id="panel">
-    <h1 id="course-name">Explore the archive</h1>
-    <p class="location" id="course-location">Select a marker on the map</p>
+  <aside id="panel" class="is-empty">
+    <h1 id="course-name">Explore the Archive</h1>
+    <p class="location" id="course-location">Select a course on the map to view its architectural history and details.</p>
     <div class="rule"></div>
-    <div class="field"><div class="label">Architect(s)</div><div class="value" id="architect">Choose a course to see details.</div></div>
+    <div class="field"><div class="label">Architect(s)</div><div class="value" id="architect">—</div></div>
     <div class="field"><div class="label">Year Built</div><div class="value" id="year-built">—</div></div>
     <div class="field"><div class="label">Last Visited</div><div class="value" id="last-visited">—</div></div>
     <div class="field"><div class="label">Connection</div><div id="relationship" class="pill">—</div></div>
@@ -62,6 +65,7 @@
   new ResizeObserver(() => map.resize()).observe(document.getElementById('archive'));
    function showCourse(properties) {
     const p = properties || {};
+    document.getElementById('panel').classList.remove('is-empty');
 
     document.getElementById('course-name').textContent =
         p['Course'] || 'Unnamed course';
@@ -123,8 +127,7 @@
       map.on('mouseleave', id, () => { map.getCanvas().style.cursor = ''; });
     });
 
-    // Start by showing the first course in the spreadsheet.
-    if (courseData.features.length) showCourse(courseData.features[0].properties);
+    // Leave the sidebar in its neutral introductory state until a course is selected.
   });
 </script>
 </body>
