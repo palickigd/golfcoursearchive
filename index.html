@@ -10,9 +10,7 @@
   /* Garamond Premier Pro requires a licensed font installed on the viewer's device or a separately hosted licensed webfont. */
   html, body { margin: 0; width: 100%; height: 100%; min-height: 100%; overflow: hidden; font-family: "ASAP", "Asap", Arial, sans-serif; color: #202820; }
   #archive { display: grid; grid-template-columns: 320px minmax(0, 1fr); height: 100vh; height: 100dvh; min-height: 0; overflow: hidden; background: #f5f4ef; }
-  #map-error { position: absolute; z-index: 10; top: 16px; left: 16px; right: 16px; padding: 14px; background: #f5f4ef; border: 1px solid #b0b6a8; font-size: 13px; line-height: 1.5; }
-  #map-error[hidden] { display: none; }
-  #map { position: relative; min-width: 0; height: 100%; min-height: 0; grid-column: 2; grid-row: 1; }
+  #map { min-width: 0; height: 100%; min-height: 0; grid-column: 2; grid-row: 1; }
   #panel { box-sizing: border-box; padding: 26px 24px; overflow-y: auto; background: #f5f4ef; border-right: 1px solid #d9ddd5; grid-column: 1; grid-row: 1; }
   .eyebrow { font-size: 10px; letter-spacing: .16em; text-transform: uppercase; color: #657364; font-weight: 700; }
   h1, h2, h3, h4, h5, h6, .eyebrow, .label { font-family: "Garamond Premier Pro", Garamond, Georgia, serif; }
@@ -38,7 +36,7 @@
 </head>
 <body>
 <div id="archive">
-  <div id="map" aria-label="Interactive golf course map"><div id="map-error" role="alert" hidden></div></div>
+  <div id="map" aria-label="Interactive golf course map"></div>
   <aside id="panel" class="is-empty">
     <h1 id="course-name">Explore the Archive</h1>
     <p class="location" id="course-location">Select a course on the map to view its architectural history and details.</p>
@@ -51,12 +49,7 @@
 </div>
 <script src="https://api.mapbox.com/mapbox-gl-js/v3.14.0/mapbox-gl.js"></script>
 <script>
-  // Published Mapbox Studio style and public access token.
-  if (typeof mapboxgl === 'undefined') {
-    document.getElementById('map-error').textContent = 'Mapbox library did not load. Check the browser connection or content blockers.';
-    document.getElementById('map-error').hidden = false;
-    throw new Error('Mapbox GL JS library unavailable');
-  }
+  // Replace these two placeholders with your Mapbox public access token and existing style URL.
   mapboxgl.accessToken = 'pk.eyJ1IjoibHBhbGlja2kiLCJhIjoiY211dmg4b3IwMDBpcTJ6b2l3Z2FtM3hsOSJ9.rkJ0aN6NR94tGIQEN2YS7A';
   const MAP_STYLE = 'mapbox://styles/lpalicki/cmuvhbhtw00g101s18ta9513b';
 
@@ -68,18 +61,6 @@
     center: [-98.5, 39.8],
     zoom: 3.8960
   });
-  // Display an actionable message if the republished style cannot load.
-  // This does not change the map style or any course data.
-  map.on('error', (event) => {
-    const message = event.error && event.error.message ? event.error.message : 'Unknown Mapbox error';
-    console.error('Golf Course Archive Mapbox error:', message, event);
-    if (!map.loaded() && /style|401|403|404|unauthorized|forbidden/i.test(message)) {
-      document.getElementById('map-error').textContent =
-        'Mapbox could not load the published map. Check that the style is published and the access token is authorized. Details: ' + message;
-      document.getElementById('map-error').hidden = false;
-    }
-  });
-  map.on('load', () => { document.getElementById('map-error').hidden = true; });
   map.addControl(new mapboxgl.NavigationControl(), 'top-left');
   // Recalculate the canvas when the embed is resized.
   new ResizeObserver(() => map.resize()).observe(document.getElementById('archive'));
@@ -108,47 +89,93 @@
 };
 
   map.on('load', () => {
+    // The published Mapbox Studio style is the source of truth for course details.
+    // Retain the local archive points solely as an invisible click fallback.
     map.addSource('courses', { type: 'geojson', data: courseData });
-    // Preserve the published Mapbox Studio style exactly: do not add a custom visual layer.
-    // Find the course marker layer(s) already defined in the published style.
-    const styleLayers = map.getStyle().layers || [];
-    const courseLayers = styleLayers.filter(layer => {
-      if (!['circle', 'symbol'].includes(layer.type)) return false;
-      const source = map.getSource(layer.source);
-      return source && layer.source !== 'courses' &&
-        /course|golf|point|marker|location/i.test([layer.id, layer['source-layer'] || '', layer.source].join(' '));
-    }).map(layer => layer.id);
-
-    // An invisible hit target enables the sidebar without changing any Mapbox styling.
     map.addLayer({
       id: 'archive-invisible-hit-target', type: 'circle', source: 'courses',
       paint: { 'circle-radius': 12, 'circle-opacity': 0, 'circle-stroke-opacity': 0 }
     });
-    const interactiveLayers = ['archive-invisible-hit-target'];
-    function onCourseClick(e) {
-      const feature = e.features && e.features[0];
-      if (!feature) return;
-      let selected = feature.properties;
-      // Use archive metadata even when Studio's source properties differ.
-      const coords = feature.geometry.coordinates.slice();
-      if (!selected || !selected.Course) {
-        const nearby = courseData.features.find(f =>
-          Math.abs(f.geometry.coordinates[0] - coords[0]) < 0.001 &&
-          Math.abs(f.geometry.coordinates[1] - coords[1]) < 0.001);
-        if (nearby) selected = nearby.properties;
+
+    // Detect the Studio marker layers; use their live feature properties for the sidebar.
+    const studioLayers = (map.getStyle().layers || []).filter(layer =>
+      ['circle', 'symbol'].includes(layer.type) &&
+      layer.source && layer.source !== 'courses' &&
+      /course|golf|point|marker|location/i.test(
+        [layer.id, layer.source, layer['source-layer'] || ''].join(' '))
+    ).map(layer => layer.id);
+
+    const normalized = value => String(value ?? '').trim().toLowerCase()
+      .replace(/[^a-z0-9]/g, '');
+    const nameOf = p => p?.Course ?? p?.course ?? p?.['Course Name'] ??
+      p?.course_name ?? p?.name ?? p?.Name ?? p?.title ?? p?.Title;
+
+    // Combine current Studio attributes with existing local data for missing fields.
+    function mergeProperties(studio, local) {
+      const result = { ...(local || {}) };
+      if (!studio) return result;
+      const aliases = {
+        'Course': ['Course', 'course', 'Course Name', 'course_name', 'name', 'Name'],
+        'Architect(s)': ['Architect(s)', 'Architects', 'architects', 'architect', 'Architect'],
+        'Year Built': ['Year Built', 'year_built', 'Year_Built', 'yearBuilt', 'year built', 'Year built', 'year', 'Year'],
+        'City': ['City', 'city'], 'State': ['State', 'state'],
+        'Last Visited': ['Last Visited', 'last_visited', 'Last_Visited', 'lastVisited'],
+        'Played/Seen/Worked': ['Played/Seen/Worked', 'Connection', 'connection', 'Category', 'category']
+      };
+      for (const [target, keys] of Object.entries(aliases)) {
+        for (const key of keys) {
+          if (studio[key] !== undefined && studio[key] !== null && String(studio[key]).trim() !== '') {
+            result[target] = studio[key];
+            break;
+          }
+        }
       }
-      if (!selected || !selected.Course) return;
-      showCourse(selected);
-      map.flyTo({ center: coords, zoom: Math.max(map.getZoom(), 7), speed: 0.8 });
+      return result;
     }
-    interactiveLayers.forEach(id => {
-      map.on('click', id, onCourseClick);
-      map.on('mouseenter', id, () => { map.getCanvas().style.cursor = 'pointer'; });
-      map.on('mouseleave', id, () => { map.getCanvas().style.cursor = ''; });
+
+    function findStudioFeature(point, localFeature) {
+      if (!studioLayers.length) return null;
+      // Mapbox renders vector features using current, published Studio source data.
+      const candidates = map.queryRenderedFeatures(point, { layers: studioLayers });
+      const localName = normalized(nameOf(localFeature?.properties));
+      return candidates.find(f => normalized(nameOf(f.properties)) === localName) ||
+        candidates.find(f => {
+          const a = f.geometry?.coordinates;
+          const b = localFeature?.geometry?.coordinates;
+          return f.geometry?.type === 'Point' && b &&
+            Math.abs(a[0] - b[0]) < 0.003 && Math.abs(a[1] - b[1]) < 0.003;
+        }) || (!localFeature ? candidates[0] : null);
+    }
+
+    map.on('click', e => {
+      const localHits = map.queryRenderedFeatures(e.point, {
+        layers: ['archive-invisible-hit-target']
+      });
+      const localFeature = localHits[0] || null;
+      const studioFeature = findStudioFeature(e.point, localFeature);
+      if (!localFeature && !studioFeature) return;
+
+      const studioName = normalized(nameOf(studioFeature?.properties));
+      const local = localFeature || courseData.features.find(f =>
+        normalized(nameOf(f.properties)) === studioName);
+      const props = mergeProperties(studioFeature?.properties, local?.properties);
+      if (!nameOf(props)) return;
+      showCourse(props);
+      const coordinates = local?.geometry?.coordinates ||
+        (studioFeature?.geometry?.type === 'Point' ? studioFeature.geometry.coordinates : e.lngLat.toArray());
+      map.flyTo({ center: coordinates, zoom: Math.max(map.getZoom(), 7), speed: 0.8 });
     });
 
-    // Leave the sidebar in its neutral introductory state until a course is selected.
+    map.on('mousemove', e => {
+      const localHits = map.queryRenderedFeatures(e.point, {
+        layers: ['archive-invisible-hit-target']
+      });
+      const studioHits = studioLayers.length ?
+        map.queryRenderedFeatures(e.point, { layers: studioLayers }) : [];
+      map.getCanvas().style.cursor = localHits.length || studioHits.length ? 'pointer' : '';
+    });
   });
+
 </script>
 </body>
 </html>
