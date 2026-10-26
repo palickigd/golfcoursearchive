@@ -10,7 +10,9 @@
   /* Garamond Premier Pro requires a licensed font installed on the viewer's device or a separately hosted licensed webfont. */
   html, body { margin: 0; width: 100%; height: 100%; min-height: 100%; overflow: hidden; font-family: "ASAP", "Asap", Arial, sans-serif; color: #202820; }
   #archive { display: grid; grid-template-columns: 320px minmax(0, 1fr); height: 100vh; height: 100dvh; min-height: 0; overflow: hidden; background: #f5f4ef; }
-  #map { min-width: 0; height: 100%; min-height: 0; grid-column: 2; grid-row: 1; }
+  #map-error { position: absolute; z-index: 10; top: 16px; left: 16px; right: 16px; padding: 14px; background: #f5f4ef; border: 1px solid #b0b6a8; font-size: 13px; line-height: 1.5; }
+  #map-error[hidden] { display: none; }
+  #map { position: relative; min-width: 0; height: 100%; min-height: 0; grid-column: 2; grid-row: 1; }
   #panel { box-sizing: border-box; padding: 26px 24px; overflow-y: auto; background: #f5f4ef; border-right: 1px solid #d9ddd5; grid-column: 1; grid-row: 1; }
   .eyebrow { font-size: 10px; letter-spacing: .16em; text-transform: uppercase; color: #657364; font-weight: 700; }
   h1, h2, h3, h4, h5, h6, .eyebrow, .label { font-family: "Garamond Premier Pro", Garamond, Georgia, serif; }
@@ -36,7 +38,7 @@
 </head>
 <body>
 <div id="archive">
-  <div id="map" aria-label="Interactive golf course map"></div>
+  <div id="map" aria-label="Interactive golf course map"><div id="map-error" role="alert" hidden></div></div>
   <aside id="panel" class="is-empty">
     <h1 id="course-name">Explore the Archive</h1>
     <p class="location" id="course-location">Select a course on the map to view its architectural history and details.</p>
@@ -49,7 +51,12 @@
 </div>
 <script src="https://api.mapbox.com/mapbox-gl-js/v3.14.0/mapbox-gl.js"></script>
 <script>
-  // Replace these two placeholders with your Mapbox public access token and existing style URL.
+  // Published Mapbox Studio style and public access token.
+  if (typeof mapboxgl === 'undefined') {
+    document.getElementById('map-error').textContent = 'Mapbox library did not load. Check the browser connection or content blockers.';
+    document.getElementById('map-error').hidden = false;
+    throw new Error('Mapbox GL JS library unavailable');
+  }
   mapboxgl.accessToken = 'pk.eyJ1IjoibHBhbGlja2kiLCJhIjoiY211dmg4b3IwMDBpcTJ6b2l3Z2FtM3hsOSJ9.rkJ0aN6NR94tGIQEN2YS7A';
   const MAP_STYLE = 'mapbox://styles/lpalicki/cmuvhbhtw00g101s18ta9513b';
 
@@ -61,6 +68,18 @@
     center: [-98.5, 39.8],
     zoom: 3.8960
   });
+  // Display an actionable message if the republished style cannot load.
+  // This does not change the map style or any course data.
+  map.on('error', (event) => {
+    const message = event.error && event.error.message ? event.error.message : 'Unknown Mapbox error';
+    console.error('Golf Course Archive Mapbox error:', message, event);
+    if (!map.loaded() && /style|401|403|404|unauthorized|forbidden/i.test(message)) {
+      document.getElementById('map-error').textContent =
+        'Mapbox could not load the published map. Check that the style is published and the access token is authorized. Details: ' + message;
+      document.getElementById('map-error').hidden = false;
+    }
+  });
+  map.on('load', () => { document.getElementById('map-error').hidden = true; });
   map.addControl(new mapboxgl.NavigationControl(), 'top-left');
   // Recalculate the canvas when the embed is resized.
   new ResizeObserver(() => map.resize()).observe(document.getElementById('archive'));
