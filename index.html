@@ -8,8 +8,8 @@
 <style>
   @import url("https://fonts.googleapis.com/css2?family=Asap:wght@400;500;600;700&display=swap");
   /* Garamond Premier Pro requires a licensed font installed on the viewer's device or a separately hosted licensed webfont. */
-  html, body { margin: 0; width: 100%; height: 100%; min-height: 100%; overflow: hidden; font-family: "ASAP", "Asap", Arial, sans-serif; color: #202820; }
-  #archive { display: grid; grid-template-columns: 320px minmax(0, 1fr); height: 100vh; height: 100dvh; min-height: 0; overflow: hidden; background: #f5f4ef; }
+  html, body { margin: 0; width: 100%; min-height: 100%; overflow-x: hidden; overflow-y: auto; font-family: "ASAP", "Asap", Arial, sans-serif; color: #202820; }
+  #archive { display: grid; grid-template-columns: 320px minmax(0, 1fr); height: 750px; min-height: 0; overflow: hidden; background: #f5f4ef; }
   #map { min-width: 0; height: 100%; min-height: 0; grid-column: 2; grid-row: 1; }
   #panel { box-sizing: border-box; padding: 26px 24px; overflow-y: auto; background: #f5f4ef; border-right: 1px solid #d9ddd5; grid-column: 1; grid-row: 1; }
   .eyebrow { font-size: 10px; letter-spacing: .16em; text-transform: uppercase; color: #657364; font-weight: 700; }
@@ -27,11 +27,31 @@
   .hint { font-size: 12px; line-height: 1.5; color: #697266; }
   .mapboxgl-popup-content { font: 13px "ASAP", "Asap", Arial, sans-serif; }
   @media (max-width: 680px) {
-    #archive { grid-template-columns: 1fr; grid-template-rows: 38% 62%; height: 100vh; height: 100dvh; }
+    #archive { grid-template-columns: 1fr; grid-template-rows: 38% 62%; height: 750px; }
     #panel { grid-column: 1; grid-row: 1; border-right: 0; border-bottom: 1px solid #d9ddd5; padding: 18px 20px; }
     #map { grid-column: 1; grid-row: 2; }
     h1 { font-size: 21px; }
   }
+
+  #directory { padding: 38px 28px 60px; background: #f5f4ef; border-top: 1px solid #d9ddd5; }
+  #directory-inner { max-width: 1320px; margin: auto; }
+  #directory h2 { font-size: 28px; margin: 0 0 6px; }
+  #directory .directory-intro { color: #657064; font-size: 13px; margin: 0 0 20px; }
+  .directory-tools { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; }
+  .directory-tools input, .directory-tools select { box-sizing: border-box; border: 1px solid #cbd2c6; border-radius: 3px; background: #fff; color: #202820; padding: 10px 12px; font: 13px Asap, Arial, sans-serif; }
+  .directory-tools input { flex: 1 1 260px; }
+  .directory-tools select { flex: 0 1 170px; }
+  #directory-count { font-size: 12px; color: #657064; margin: 8px 0 12px; }
+  .directory-table-wrap { overflow-x: auto; border: 1px solid #d9ddd5; }
+  .directory-table { width: 100%; border-collapse: collapse; font-size: 12px; text-align: left; }
+  .directory-table th { background: #e8ece4; font: bold 11px Asap, Arial, sans-serif; text-transform: uppercase; letter-spacing: .04em; white-space: nowrap; cursor: pointer; }
+  .directory-table th, .directory-table td { padding: 12px 13px; border-bottom: 1px solid #d9ddd5; vertical-align: top; }
+  .directory-table tr:last-child td { border-bottom: 0; }
+  .directory-table tbody tr { cursor: pointer; }
+  .directory-table tbody tr:hover { background: #e9eee5; }
+  .directory-table td:first-child { font-weight: 600; min-width: 155px; }
+  .directory-table td:nth-child(3) { min-width: 170px; }
+  @media(max-width:680px) { #directory { padding: 28px 15px 45px; } #directory h2 { font-size: 23px; } }
 </style>
 </head>
 <body>
@@ -47,6 +67,22 @@
     <div class="field"><div class="label">Connection</div><div id="relationship" class="pill">—</div></div>
   </aside>
 </div>
+
+<section id="directory" aria-label="Golf course directory">
+  <div id="directory-inner">
+    <h2>Golf Course Directory</h2>
+    <p class="directory-intro">Browse the complete archive. Select a course to locate it on the map.</p>
+    <div class="directory-tools">
+      <input id="directory-search" type="search" placeholder="Search course, architect, or location…" aria-label="Search courses">
+      <select id="directory-filter" aria-label="Filter by connection"><option value="">All connections</option><option>Played</option><option>Visited</option><option>Worked On</option></select>
+    </div>
+    <div id="directory-count" aria-live="polite"></div>
+    <div class="directory-table-wrap"><table class="directory-table">
+      <thead><tr><th data-sort="Course">Course ↕</th><th data-sort="Location">Location ↕</th><th data-sort="Architect(s)">Architect(s) ↕</th><th data-sort="Year Built">Year Built ↕</th><th data-sort="Last Visited">Last Visited ↕</th><th data-sort="Played/Seen/Worked">Connection ↕</th></tr></thead>
+      <tbody id="directory-rows"></tbody>
+    </table></div>
+  </div>
+</section>
 <script src="https://api.mapbox.com/mapbox-gl-js/v3.14.0/mapbox-gl.js"></script>
 <script>
   // Replace these two placeholders with your Mapbox public access token and existing style URL.
@@ -87,6 +123,52 @@
     p['Played/Seen/Worked'] || 'Not specified';
 
 };
+
+
+  // Directory uses the archive's course data. Studio values are merged when a marker is selected.
+  const directoryFeatures = courseData.features.map(f => ({...f, properties: {...f.properties}}));
+  let directorySort = 'Course', directoryDescending = false;
+  const directorySearch = document.getElementById('directory-search');
+  const directoryFilter = document.getElementById('directory-filter');
+  const directoryRows = document.getElementById('directory-rows');
+  const directoryCount = document.getElementById('directory-count');
+  function locationText(p) { return [p.City, p.State].filter(Boolean).join(', '); }
+  function valueText(value) { return value === null || value === undefined || value === '' ? '—' : String(value); }
+  function renderDirectory() {
+    const q = directorySearch.value.trim().toLowerCase();
+    const category = directoryFilter.value;
+    const rows = directoryFeatures.filter(f => {
+      const p = f.properties;
+      return (!category || p['Played/Seen/Worked'] === category) &&
+        (!q || [p.Course, locationText(p), p['Architect(s)'], p['Year Built'], p['Last Visited'], p['Played/Seen/Worked']].join(' ').toLowerCase().includes(q));
+    }).sort((a,b) => {
+      const val = f => directorySort === 'Location' ? locationText(f.properties) : f.properties[directorySort];
+      const aa = val(a), bb = val(b);
+      const result = typeof aa === 'number' && typeof bb === 'number' ? aa-bb : String(aa ?? '').localeCompare(String(bb ?? ''), undefined, {numeric:true});
+      return directoryDescending ? -result : result;
+    });
+    directoryRows.replaceChildren();
+    for (const f of rows) {
+      const p = f.properties, tr = document.createElement('tr');
+      for (const value of [p.Course, locationText(p), p['Architect(s)'], p['Year Built'], p['Last Visited'], p['Played/Seen/Worked']]) {
+        const td = document.createElement('td'); td.textContent = valueText(value); tr.appendChild(td);
+      }
+      tr.tabIndex = 0;
+      const select = () => { showCourse(p); map.flyTo({center:f.geometry.coordinates, zoom:Math.max(map.getZoom(), 7), speed:0.8}); document.getElementById('archive').scrollIntoView({behavior:'smooth'}); };
+      tr.addEventListener('click', select);
+      tr.addEventListener('keydown', e => { if (e.key === 'Enter') select(); });
+      directoryRows.appendChild(tr);
+    }
+    directoryCount.textContent = `${rows.length} of ${directoryFeatures.length} courses`;
+  }
+  directorySearch.addEventListener('input', renderDirectory);
+  directoryFilter.addEventListener('change', renderDirectory);
+  document.querySelectorAll('.directory-table th[data-sort]').forEach(th => th.addEventListener('click', () => {
+    const key = th.dataset.sort;
+    directoryDescending = directorySort === key ? !directoryDescending : false;
+    directorySort = key; renderDirectory();
+  }));
+  renderDirectory();
 
   map.on('load', () => {
     // The published Mapbox Studio style is the source of truth for course details.
@@ -172,6 +254,8 @@
       const props = mergeProperties(studioFeature?.properties, local?.properties);
       if (!nameOf(props)) return;
       showCourse(props);
+      const updated = directoryFeatures.find(f => f.properties.Course === props.Course);
+      if (updated) { Object.assign(updated.properties, props); renderDirectory(); }
       const coordinates = local?.geometry?.coordinates ||
         (studioFeature?.geometry?.type === 'Point' ? studioFeature.geometry.coordinates : e.lngLat.toArray());
       map.flyTo({ center: coordinates, zoom: Math.max(map.getZoom(), 7), speed: 0.8 });
