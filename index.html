@@ -222,7 +222,8 @@
       if (!meta.tiles?.length) throw new Error('No vector tiles returned by Mapbox');
       // The archive covers the continental United States. Fetch at zoom 5 to
       // avoid limiting results to whichever tiles happen to be on screen.
-      const z = Math.min(5, meta.maxzoom ?? 5);
+      const z = Math.max(Number(meta.minzoom || 0), Math.min(6, Number(meta.maxzoom ?? 6)));
+      if (z > 8) throw new Error('Tileset minimum zoom exceeds 8; a direct GeoJSON export is needed for complete nationwide directory sync');
       const bounds = [-125, 24, -66, 50];
       const requests = [];
       for (let x=tileX(bounds[0],z); x<=tileX(bounds[2],z); x++) {
@@ -235,6 +236,8 @@
         await Promise.all(requests.slice(i,i+8).map(async ([x,y]) => {
           try {
             let url = meta.tiles[0].replace('{z}',z).replace('{x}',x).replace('{y}',y);
+            if (url.startsWith('//')) url = 'https:' + url;
+            if (url.startsWith('http:')) url = url.replace(/^http:/, 'https:');
             if (!url.includes('access_token=')) url += (url.includes('?') ? '&' : '?') + 'access_token=' + token;
             const r = await fetch(url);
             if (!r.ok) return;
@@ -254,7 +257,31 @@
           } catch (err) { console.warn('Could not decode Mapbox tile',x,y,err); }
         }));
       }
-      if (!successTiles || !features.length) throw new Error('No course features found in published vector tiles');
+      if (!successTiles || !features.length) {
+        // Fall back to Mapbox Tilequery for the known course locations.
+        // This queries the published tileset itself, not the hardcoded year values.
+        const known = courseData.features;
+        for (let i=0; i<known.length; i+=6) {
+          await Promise.all(known.slice(i,i+6).map(async old => {
+            try {
+              const [lon,lat] = old.geometry.coordinates;
+              const u = `https://api.mapbox.com/v4/${LIVE_TILESET}/tilequery/${lon},${lat}.json?radius=500&limit=20&access_token=${token}`;
+              const r = await fetch(u, {cache:'no-store'});
+              if (!r.ok) return;
+              const result = await r.json();
+              const wanted = normalizeName(old.properties.Course);
+              const match = (result.features || []).find(f =>
+                normalizeName(canonicalProps(f.properties).Course) === wanted);
+              if (match) features.push({
+                type:'Feature',
+                geometry:old.geometry,
+                properties:canonicalProps(match.properties)
+              });
+            } catch (e) { console.warn('Tilequery failed for', old.properties.Course, e); }
+          }));
+        }
+        if (!features.length) throw new Error('Published Mapbox tileset returned no matching course records. Check that this tileset contains the updated data and is publicly readable.');
+      }
       const oldByName = new Map(courseData.features.map(f => [normalizeName(f.properties.Course),f]));
       const unique = new Map();
       for (const f of features) {
@@ -262,8 +289,13 @@
         const old = oldByName.get(name);
         const merged = {...(old?.properties || {}),...f.properties};
         const coords = f.geometry.coordinates;
-        const key = name + ':' + normalizeName(merged.City || '') + ':' + normalizeName(merged.State || '');
+        const key = name;
         if (!unique.has(key)) unique.set(key,{type:'Feature',geometry:{type:'Point',coordinates:coords},properties:merged});
+      }
+      // Keep saved courses not represented in the published tileset, rather than silently deleting them.
+      for (const old of courseData.features) {
+        const key = normalizeName(old.properties.Course);
+        if (!unique.has(key)) unique.set(key, old);
       }
       directoryFeatures = [...unique.values()];
       courseData.features = directoryFeatures;
@@ -273,11 +305,9 @@
       liveStatus.textContent = `Live data loaded from Mapbox tileset ${LIVE_TILESET}.`;
     } catch (err) {
       console.error('Live Mapbox course sync failed:',err);
-      liveStatus.textContent = 'Live Mapbox sync unavailable; showing saved archive data. Check that the updated dataset was published to its tileset.';
+      liveStatus.textContent = `Mapbox data could not be synchronized (${err.message}). The directory is showing saved data, NOT verified current Mapbox data.`;
     }
   }
-  syncPublishedCourses();
-
   map.on('load', () => {
     // The published Mapbox Studio style is the source of truth for course details.
     // Retain the local archive points solely as an invisible click fallback.
@@ -293,6 +323,7 @@
         'circle-stroke-width': 1.5
       }
     });
+    syncPublishedCourses();
     map.addLayer({
       id: 'archive-invisible-hit-target', type: 'circle', source: 'courses',
       paint: { 'circle-radius': 12, 'circle-opacity': 0, 'circle-stroke-opacity': 0 }
