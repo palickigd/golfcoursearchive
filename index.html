@@ -92,6 +92,17 @@
     // The published Mapbox Studio style is the source of truth for course details.
     // Retain the local archive points solely as an invisible click fallback.
     map.addSource('courses', { type: 'geojson', data: courseData });
+    // Visible archive dots. Keep the larger invisible layer for easy clicking.
+    map.addLayer({
+      id: 'archive-visible-course-dots', type: 'circle', source: 'courses',
+      paint: {
+        'circle-radius': 5,
+        'circle-color': '#324e39',
+        'circle-opacity': 0.95,
+        'circle-stroke-color': '#f5f4ef',
+        'circle-stroke-width': 1.5
+      }
+    });
     map.addLayer({
       id: 'archive-invisible-hit-target', type: 'circle', source: 'courses',
       paint: { 'circle-radius': 12, 'circle-opacity': 0, 'circle-stroke-opacity': 0 }
