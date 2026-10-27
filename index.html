@@ -84,6 +84,8 @@
   </div>
 </section>
 <script src="https://api.mapbox.com/mapbox-gl-js/v3.14.0/mapbox-gl.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/pbf@3.2.1/dist/pbf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mapbox/vector-tile@1.3.1/dist/vector-tile.js"></script>
 <script>
   // Replace these two placeholders with your Mapbox public access token and existing style URL.
   mapboxgl.accessToken = 'pk.eyJ1IjoibHBhbGlja2kiLCJhIjoiY211dmg4b3IwMDBpcTJ6b2l3Z2FtM3hsOSJ9.rkJ0aN6NR94tGIQEN2YS7A';
@@ -126,7 +128,7 @@
 
 
   // Directory uses the archive's course data. Studio values are merged when a marker is selected.
-  const directoryFeatures = courseData.features.map(f => ({...f, properties: {...f.properties}}));
+  let directoryFeatures = courseData.features.map(f => ({...f, properties: {...f.properties}}));
   let directorySort = 'Course', directoryDescending = false;
   const directorySearch = document.getElementById('directory-search');
   const directoryFilter = document.getElementById('directory-filter');
@@ -169,6 +171,112 @@
     directorySort = key; renderDirectory();
   }));
   renderDirectory();
+
+
+  // Live Mapbox tileset sync. This reads ALL relevant vector tiles, not only
+  // currently visible markers. Republish the TILESET after editing its dataset.
+  const LIVE_TILESET = 'lpalicki.7dih97dekp66';
+  const liveStatus = document.createElement('p');
+  liveStatus.className = 'directory-intro';
+  liveStatus.style.marginTop = '6px';
+  liveStatus.textContent = 'Loading published Mapbox course data…';
+  document.getElementById('directory-count').after(liveStatus);
+
+  const normalizeName = v => String(v ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  function fieldValue(p, names) {
+    const keys = Object.keys(p || {});
+    for (const n of names) {
+      const key = keys.find(k => normalizeName(k) === normalizeName(n));
+      if (key && p[key] !== undefined && p[key] !== null && String(p[key]).trim() !== '') return p[key];
+    }
+    return undefined;
+  }
+  function canonicalProps(raw) {
+    const fields = {
+      'Course': ['Course', 'Course Name', 'course_name', 'name', 'title'],
+      'Architect(s)': ['Architect(s)', 'Architects', 'architect', 'architects'],
+      'Year Built': ['Year Built', 'year_built', 'yearBuilt', 'Year'],
+      'City': ['City'], 'State': ['State'],
+      'Last Visited': ['Last Visited', 'last_visited', 'lastVisited'],
+      'Played/Seen/Worked': ['Played/Seen/Worked', 'Connection', 'Category', 'Played Seen Worked']
+    };
+    const out = {};
+    for (const [target, names] of Object.entries(fields)) {
+      const value = fieldValue(raw, names);
+      if (value !== undefined) out[target] = value;
+    }
+    return out;
+  }
+  function tileX(lon, z) { return Math.floor((lon + 180) / 360 * (2 ** z)); }
+  function tileY(lat, z) {
+    const r = Math.max(-85, Math.min(85, lat)) * Math.PI / 180;
+    return Math.floor((1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2 * (2 ** z));
+  }
+  async function syncPublishedCourses() {
+    try {
+      if (!window.Pbf || !window.VectorTile) throw new Error('Vector tile decoder did not load');
+      const token = encodeURIComponent(mapboxgl.accessToken);
+      const metadataResponse = await fetch(`https://api.mapbox.com/v4/${LIVE_TILESET}.json?access_token=${token}`, {cache:'no-store'});
+      if (!metadataResponse.ok) throw new Error(`Tileset metadata HTTP ${metadataResponse.status}`);
+      const meta = await metadataResponse.json();
+      if (!meta.tiles?.length) throw new Error('No vector tiles returned by Mapbox');
+      // The archive covers the continental United States. Fetch at zoom 5 to
+      // avoid limiting results to whichever tiles happen to be on screen.
+      const z = Math.min(5, meta.maxzoom ?? 5);
+      const bounds = [-125, 24, -66, 50];
+      const requests = [];
+      for (let x=tileX(bounds[0],z); x<=tileX(bounds[2],z); x++) {
+        for (let y=tileY(bounds[3],z); y<=tileY(bounds[1],z); y++) requests.push([x,y]);
+      }
+      const features = [];
+      let successTiles = 0;
+      // Bounded concurrency avoids overloading the Mapbox API.
+      for (let i=0; i<requests.length; i+=8) {
+        await Promise.all(requests.slice(i,i+8).map(async ([x,y]) => {
+          try {
+            let url = meta.tiles[0].replace('{z}',z).replace('{x}',x).replace('{y}',y);
+            if (!url.includes('access_token=')) url += (url.includes('?') ? '&' : '?') + 'access_token=' + token;
+            const r = await fetch(url);
+            if (!r.ok) return;
+            const vt = new VectorTile(new Pbf(await r.arrayBuffer()));
+            successTiles++;
+            for (const layerName of Object.keys(vt.layers)) {
+              const layer = vt.layers[layerName];
+              for (let j=0; j<layer.length; j++) {
+                const f = layer.feature(j);
+                const props = canonicalProps(f.properties);
+                if (!props.Course) continue;
+                const geo = f.toGeoJSON(x,y,z);
+                if (geo.geometry?.type !== 'Point') continue;
+                features.push({type:'Feature',geometry:geo.geometry,properties:props});
+              }
+            }
+          } catch (err) { console.warn('Could not decode Mapbox tile',x,y,err); }
+        }));
+      }
+      if (!successTiles || !features.length) throw new Error('No course features found in published vector tiles');
+      const oldByName = new Map(courseData.features.map(f => [normalizeName(f.properties.Course),f]));
+      const unique = new Map();
+      for (const f of features) {
+        const name = normalizeName(f.properties.Course);
+        const old = oldByName.get(name);
+        const merged = {...(old?.properties || {}),...f.properties};
+        const coords = f.geometry.coordinates;
+        const key = name + ':' + normalizeName(merged.City || '') + ':' + normalizeName(merged.State || '');
+        if (!unique.has(key)) unique.set(key,{type:'Feature',geometry:{type:'Point',coordinates:coords},properties:merged});
+      }
+      directoryFeatures = [...unique.values()];
+      courseData.features = directoryFeatures;
+      const source = map.getSource('courses');
+      if (source) source.setData(courseData);
+      renderDirectory();
+      liveStatus.textContent = `Live data loaded from Mapbox tileset ${LIVE_TILESET}.`;
+    } catch (err) {
+      console.error('Live Mapbox course sync failed:',err);
+      liveStatus.textContent = 'Live Mapbox sync unavailable; showing saved archive data. Check that the updated dataset was published to its tileset.';
+    }
+  }
+  syncPublishedCourses();
 
   map.on('load', () => {
     // The published Mapbox Studio style is the source of truth for course details.
