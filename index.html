@@ -180,6 +180,7 @@
   liveStatus.className = 'directory-intro';
   liveStatus.style.marginTop = '6px';
   liveStatus.textContent = 'Loading published Mapbox course data…';
+  liveStatus.hidden = true;
   document.getElementById('directory-count').after(liveStatus);
 
   const normalizeName = v => String(v ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -256,12 +257,9 @@
     const source = map.getSource('courses');
     if (source) source.setData(courseData);
     renderDirectory();
-    if (matched === old.length) {
-      liveStatus.textContent = `✓ ${matched} courses synchronized from published Mapbox data (${LIVE_TILESET}).`;
-    } else {
-      liveStatus.textContent = `⚠ ${matched}/${old.length} courses updated from Mapbox. ${failed.length} unmatched or unavailable; their saved values may be outdated.`;
-      console.warn('Courses not matched in the published tileset:', failed);
-    }
+    // Keep sync diagnostics in the browser console, not the public directory.
+    if (matched !== old.length) console.warn(`Mapbox sync: ${matched}/${old.length} matched; unmatched courses:`, failed);
+    liveStatus.hidden = true;
   }
   map.on('load', () => {
     // The published Mapbox Studio style is the source of truth for course details.
